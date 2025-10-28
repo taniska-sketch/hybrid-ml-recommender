@@ -31,19 +31,18 @@ def download_models_if_missing():
 download_models_if_missing()
 
 # ------------------------------------------
-# DATA FILES ✅
+# LOCAL DATA FILES ✅ (Upload to GitHub)
 # ------------------------------------------
 META_CSV = os.path.join(DATA_DIR, "songs_metadata_for_api.csv")
 SCALED_CSV = os.path.join(DATA_DIR, "scaled_feature_sample.csv")
 
-CB_PKL = os.path.join(MODEL_DIR, "content_similarity.pkl")
-CF_PKL = os.path.join(MODEL_DIR, "item_similarity_cf_matrix.pkl")
-UIM_PKL = os.path.join(MODEL_DIR, "user_item_matrix.pkl")
+if not os.path.exists(META_CSV) or not os.path.exists(SCALED_CSV):
+    raise FileNotFoundError("❌ CSV data missing! Upload to /data folder in GitHub")
 
 METADATA = pd.read_csv(META_CSV)
 METADATA["track_id"] = METADATA["track_id"].astype(str)
 
-# popularity fallback
+# Popularity fallback if needed
 if "popularity" not in METADATA.columns:
     pop = METADATA["artist_name"].value_counts().to_dict()
     METADATA["popularity"] = METADATA["artist_name"].map(lambda x: pop.get(x, 1))
@@ -53,7 +52,7 @@ if "popularity" not in METADATA.columns:
 # ------------------------------------------
 df_scaled = pd.read_csv(SCALED_CSV, index_col="track_id")
 CB_TRACK_IDS = df_scaled.index.tolist()
-CB_SIM = joblib.load(CB_PKL)
+CB_SIM = joblib.load(os.path.join(MODEL_DIR, "content_similarity.pkl"))
 CB_INDEX = {tid: i for i, tid in enumerate(CB_TRACK_IDS)}
 
 # ------------------------------------------
@@ -61,6 +60,9 @@ CB_INDEX = {tid: i for i, tid in enumerate(CB_TRACK_IDS)}
 # ------------------------------------------
 CF_SIM = None
 CF_INDEX = {}
+CF_PKL = os.path.join(MODEL_DIR, "item_similarity_cf_matrix.pkl")
+UIM_PKL = os.path.join(MODEL_DIR, "user_item_matrix.pkl")
+
 if os.path.exists(CF_PKL) and os.path.exists(UIM_PKL):
     CF_SIM = joblib.load(CF_PKL)
     uim = joblib.load(UIM_PKL)
@@ -77,7 +79,7 @@ def fallback_top_popular(top_n=10):
 
 def ensure_seed_or_fallback(track_id, top_n=10):
     if track_id not in METADATA["track_id"].values:
-        print("⚠️ Seed missing → returning popular fallback")
+        print("⚠️ Seed missing → Popular fallback")
         return fallback_top_popular(top_n)
     return None
 
@@ -98,8 +100,8 @@ def recommend_cf(track_id, top_n=10):
     return [(CF_TRACK_IDS[j], float(sims[j])) for j in order]
 
 def recommend_hybrid(track_id, user_id=None, top_n=10, w_cb=0.4, w_cf=0.6):
-    cb = recommend_cb(track_id, top_n * 2)
-    cf = recommend_cf(track_id, top_n * 2)
+    cb = recommend_cb(track_id, top_n*2)
+    cf = recommend_cf(track_id, top_n*2)
 
     combined = {}
     for tid, score in cb:
