@@ -1,10 +1,10 @@
-# Ignore large model & data files
-models/
-data/
-*.pkl
-*.zip
-*.csv
+# Ignore large model files
+models/*.pkl
+models/*.zip
 
-# Python cache
+# Allow data CSV ✅
+!data/*.csv
+
+# Ignore cached python files
 __pycache__/
 *.pyc
