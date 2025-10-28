@@ -1,57 +1,47 @@
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
+from src.recommend import recommend_hybrid
 
-from src.recommend import (
-    METADATA,
-    fallback_top_popular,
-    ensure_seed_or_fallback,
-    recommend_cb,
-    recommend_cf,
-    recommend_hybrid
+app = FastAPI(
+    title="Hybrid Music Recommender API",
+    description="Content + Collaborative Filtering based hybrid music recommender system",
+    version="1.0"
 )
 
-app = FastAPI(title="Hybrid Song Recommender", version="1.0.0")
+@app.get("/")
+async def root():
+    return {
+        "message": "✅ Hybrid Music Recommender API is running successfully!",
+        "endpoints": {
+            "docs": "/docs",
+            "hybrid_recommendation": "/recommend/hybrid?track_id=<TRACK_ID>&user_id=<USER_ID(optional)>&top_n=10"
+        },
+        "example_track_id": "6dyku3NZZukkS8yhzWG9TU"
+    }
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+@app.get("/health")
+async def health():
+    return {"status": "✅ OK - Service healthy"}
 
-class HybridRequest(BaseModel):
+# ✅ Recommendation Request Body
+class RecommendRequest(BaseModel):
     track_id: str
     user_id: Optional[str] = None
     top_n: int = 10
     w_cb: float = 0.4
     w_cf: float = 0.6
 
-@app.get("/health")
-def health():
-    return {"status": "ok", "tracks": len(METADATA)}
-
-@app.get("/popular")
-def popular(top_n: int = 10):
-    return fallback_top_popular(top_n)
-
-@app.get("/recommend/cb")
-def rec_cb(track_id: str, top_n: int = 10):
-    fb = ensure_seed_or_fallback(track_id, top_n)
-    return fb if fb else recommend_cb(track_id, top_n)
-
-@app.get("/recommend/cf")
-def rec_cf(track_id: str, top_n: int = 10):
-    return recommend_cf(track_id, top_n)
-
 @app.post("/recommend/hybrid")
-def rec_hybrid(payload: HybridRequest):
-    fb = ensure_seed_or_fallback(payload.track_id, payload.top_n)
-    return fb if fb else recommend_hybrid(
-        payload.track_id,
-        payload.user_id,
-        payload.top_n,
-        payload.w_cb,
-        payload.w_cf
+async def hybrid_recommend_api(req: RecommendRequest):
+    result = recommend_hybrid(
+        req.track_id,
+        user_id=req.user_id,
+        top_n=req.top_n,
+        w_cb=req.w_cb,
+        w_cf=req.w_cf
     )
+    if not result:
+        return {"error": "Track not found or no recommendations available"}
+    return result
+
