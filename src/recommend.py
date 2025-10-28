@@ -13,9 +13,9 @@ MODEL_DIR = "models"
 os.makedirs(MODEL_DIR, exist_ok=True)
 
 FILE_IDS = {
-    "content_similarity.pkl": "https://drive.google.com/file/d/145t8B6RdV9GXJNDSEkvF5BXhOA4qq7XE/view?usp=sharing",  
-    "item_similarity_cf_matrix.pkl": "https://drive.google.com/file/d/1pmWdY5DCpUDp4--ej0EM912pgdohdzPS/view?usp=sharing",  
-    "user_item_matrix.pkl": "https://drive.google.com/file/d/1ldM64nwdj4hNSmwnBxpbIHEr0VR7BsWg/view?usp=sharing"  
+    "content_similarity.pkl": "145t8B6RdV9GXJNDSEkvF5BXhOA4qq7XE",
+    "item_similarity_cf_matrix.pkl": "1pmWdY5DCpUDp4--ej0EM912pgdohdzPS",
+    "user_item_matrix.pkl": "1ldM64nwdj4hNSmwnBxpbIHEr0VR7BsWg"
 }
 
 def download_models_if_missing():
@@ -98,8 +98,8 @@ def recommend_cf(track_id, top_n=10):
     return [(CF_TRACK_IDS[j], float(sims[j])) for j in order]
 
 def recommend_hybrid(track_id, user_id=None, top_n=10, w_cb=0.4, w_cf=0.6):
-    cb = recommend_cb(track_id, top_n*2)
-    cf = recommend_cf(track_id, top_n*2)
+    cb = recommend_cb(track_id, top_n * 2)
+    cf = recommend_cf(track_id, top_n * 2)
 
     combined = {}
     for tid, score in cb:
