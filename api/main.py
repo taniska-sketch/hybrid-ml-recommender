@@ -1,7 +1,7 @@
-from fastapi import FastAPI, Query
-from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional
 
 from src.recommend import (
     METADATA,
@@ -12,15 +12,12 @@ from src.recommend import (
     recommend_hybrid
 )
 
-app = FastAPI(
-    title="Hybrid Song Recommender API",
-    version="1.0.0"
-)
+app = FastAPI(title="Hybrid Song Recommender", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET", "POST"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
@@ -52,6 +49,9 @@ def rec_cf(track_id: str, top_n: int = 10):
 def rec_hybrid(payload: HybridRequest):
     fb = ensure_seed_or_fallback(payload.track_id, payload.top_n)
     return fb if fb else recommend_hybrid(
-        payload.track_id, payload.user_id,
-        payload.top_n, payload.w_cb, payload.w_cf
+        payload.track_id,
+        payload.user_id,
+        payload.top_n,
+        payload.w_cb,
+        payload.w_cf
     )

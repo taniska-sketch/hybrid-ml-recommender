@@ -1,103 +1,124 @@
+# src/recommend.py
 import os
 import numpy as np
 import pandas as pd
 import joblib
+import gdown
 
-# BASE DIRECTORIES
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-MODEL_DIR = os.path.join(BASE_DIR, "models")
+# ------------------------------------------
+# GOOGLE DRIVE MODEL DOWNLOAD ✅
+# ------------------------------------------
+DATA_DIR = "data"
+MODEL_DIR = "models"
+os.makedirs(MODEL_DIR, exist_ok=True)
 
-# FILE PATHS
+FILE_IDS = {
+    "content_similarity.pkl": "https://drive.google.com/file/d/145t8B6RdV9GXJNDSEkvF5BXhOA4qq7XE/view?usp=sharing",  
+    "item_similarity_cf_matrix.pkl": "https://drive.google.com/file/d/1pmWdY5DCpUDp4--ej0EM912pgdohdzPS/view?usp=sharing",  
+    "user_item_matrix.pkl": "https://drive.google.com/file/d/1ldM64nwdj4hNSmwnBxpbIHEr0VR7BsWg/view?usp=sharing"  
+}
+
+def download_models_if_missing():
+    for file_name, file_id in FILE_IDS.items():
+        file_path = os.path.join(MODEL_DIR, file_name)
+        if not os.path.exists(file_path):
+            url = f"https://drive.google.com/uc?id={file_id}"
+            print(f"⬇️ Downloading {file_name} ...")
+            gdown.download(url, file_path, quiet=False)
+        else:
+            print(f"✅ Already Exists: {file_name}")
+
+download_models_if_missing()
+
+# ------------------------------------------
+# DATA FILES ✅
+# ------------------------------------------
 META_CSV = os.path.join(DATA_DIR, "songs_metadata_for_api.csv")
 SCALED_CSV = os.path.join(DATA_DIR, "scaled_feature_sample.csv")
+
 CB_PKL = os.path.join(MODEL_DIR, "content_similarity.pkl")
 CF_PKL = os.path.join(MODEL_DIR, "item_similarity_cf_matrix.pkl")
 UIM_PKL = os.path.join(MODEL_DIR, "user_item_matrix.pkl")
 
-# GLOBALS
-METADATA = pd.DataFrame()
-CB_SIM = None
-CB_INDEX = {}
+METADATA = pd.read_csv(META_CSV)
+METADATA["track_id"] = METADATA["track_id"].astype(str)
+
+# popularity fallback
+if "popularity" not in METADATA.columns:
+    pop = METADATA["artist_name"].value_counts().to_dict()
+    METADATA["popularity"] = METADATA["artist_name"].map(lambda x: pop.get(x, 1))
+
+# ------------------------------------------
+# Load CB Similarity ✅
+# ------------------------------------------
+df_scaled = pd.read_csv(SCALED_CSV, index_col="track_id")
+CB_TRACK_IDS = df_scaled.index.tolist()
+CB_SIM = joblib.load(CB_PKL)
+CB_INDEX = {tid: i for i, tid in enumerate(CB_TRACK_IDS)}
+
+# ------------------------------------------
+# Load CF Similarity ✅
+# ------------------------------------------
 CF_SIM = None
-USER_ITEM_MATRIX = None
 CF_INDEX = {}
+if os.path.exists(CF_PKL) and os.path.exists(UIM_PKL):
+    CF_SIM = joblib.load(CF_PKL)
+    uim = joblib.load(UIM_PKL)
+    uim.columns = uim.columns.astype(str)
+    CF_TRACK_IDS = list(uim.columns)
+    CF_INDEX = {tid: i for i, tid in enumerate(CF_TRACK_IDS)}
 
-def initialize():
-    global METADATA, CB_SIM, CB_INDEX, CF_SIM, USER_ITEM_MATRIX, CF_INDEX
-
-    print("🔄 Initializing Recommender...")
-
-    METADATA = pd.read_csv(META_CSV)
-    METADATA["track_id"] = METADATA["track_id"].astype(str)
-
-    df_scaled = pd.read_csv(SCALED_CSV, index_col="track_id")
-    CB_SIM = joblib.load(CB_PKL)
-    CB_INDEX = {tid: i for i, tid in enumerate(df_scaled.index)}
-
-    try:
-        CF_SIM = joblib.load(CF_PKL)
-        USER_ITEM_MATRIX = joblib.load(UIM_PKL)
-        USER_ITEM_MATRIX.columns = USER_ITEM_MATRIX.columns.astype(str)
-        CF_INDEX = {tid: i for i, tid in enumerate(USER_ITEM_MATRIX.columns)}
-        print("✅ CF Loaded")
-    except:
-        CF_SIM = None
-        USER_ITEM_MATRIX = None
-        CF_INDEX = {}
-        print("⚠️ CF model not loaded, only CB will be active")
-
-    if "popularity" not in METADATA.columns:
-        METADATA["popularity"] = METADATA["artist_name"].map(
-            METADATA["artist_name"].value_counts().to_dict()
-        )
-
-    print("✅ METADATA:", len(METADATA))
-    print("✅ Content tracks:", len(CB_INDEX))
-    print("✅ CF tracks:", len(CF_INDEX))
-
+# ------------------------------------------
+# RECOMMENDERS ✅
+# ------------------------------------------
 def fallback_top_popular(top_n=10):
     df = METADATA.sort_values("popularity", ascending=False).head(top_n)
     return df.to_dict(orient="records")
 
-def ensure_seed_or_fallback(track_id, top_n):
-    if track_id not in CB_INDEX and track_id not in CF_INDEX:
+def ensure_seed_or_fallback(track_id, top_n=10):
+    if track_id not in METADATA["track_id"].values:
+        print("⚠️ Seed missing → returning popular fallback")
         return fallback_top_popular(top_n)
     return None
 
 def recommend_cb(track_id, top_n=10):
     if track_id not in CB_INDEX:
         return []
-    idx = CB_INDEX[track_id]
-    sims = CB_SIM[idx]
-    top_ids = np.argsort(-sims)[1:top_n+1]
-    return [(list(CB_INDEX.keys())[i], float(sims[i])) for i in top_ids]
+    i = CB_INDEX[track_id]
+    sims = CB_SIM[i]
+    order = np.argsort(-sims)[1:top_n+1]
+    return [(CB_TRACK_IDS[j], float(sims[j])) for j in order]
 
 def recommend_cf(track_id, top_n=10):
     if CF_SIM is None or track_id not in CF_INDEX:
         return []
-    idx = CF_INDEX[track_id]
-    sims = CF_SIM[idx]
-    top_ids = np.argsort(-sims)[1:top_n+1]
-    return [(USER_ITEM_MATRIX.columns[i], float(sims[i])) for i in top_ids]
+    i = CF_INDEX[track_id]
+    sims = CF_SIM[i]
+    order = np.argsort(-sims)[1:top_n+1]
+    return [(CF_TRACK_IDS[j], float(sims[j])) for j in order]
 
-def recommend_hybrid(seed_track_id, user_id=None, top_n=10, w_cb=0.4, w_cf=0.6):
-    cb = dict(recommend_cb(seed_track_id, top_n * 2))
-    cf = dict(recommend_cf(seed_track_id, top_n * 2))
+def recommend_hybrid(track_id, user_id=None, top_n=10, w_cb=0.4, w_cf=0.6):
+    cb = recommend_cb(track_id, top_n*2)
+    cf = recommend_cf(track_id, top_n*2)
 
-    all_ids = set(cb.keys()).union(set(cf.keys()))
+    combined = {}
+    for tid, score in cb:
+        combined[tid] = combined.get(tid, 0.0) + w_cb * score
+    for tid, score in cf:
+        combined[tid] = combined.get(tid, 0.0) + w_cf * score
+
+    ranked = sorted(combined.items(), key=lambda x: x[1], reverse=True)
+
     result = []
-
-    for tid in all_ids:
-        score = w_cb * cb.get(tid, 0) + w_cf * cf.get(tid, 0)
-        row = METADATA[METADATA["track_id"] == tid].iloc[0].to_dict()
-        row["hybrid_score"] = round(score, 4)
-        result.append(row)
-
-    return sorted(result, key=lambda x: -x["hybrid_score"])[:top_n]
-
-# INIT
-try:
-    initialize()
-except Exception as e:
-    print("❌ Initialization FAILED:", e)
+    for tid, score in ranked[:top_n]:
+        row = METADATA[METADATA["track_id"] == tid]
+        if not row.empty:
+            r = row.iloc[0]
+            result.append({
+                "track_id": tid,
+                "track_name": r["track_name"],
+                "artist_name": r["artist_name"],
+                "popularity": int(r.get("popularity", 0)),
+                "hybrid_score": round(score, 4)
+            })
+    return result
