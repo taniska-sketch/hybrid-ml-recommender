@@ -1,0 +1,10 @@
+# Ignore large model & data files
+models/
+data/
+*.pkl
+*.zip
+*.csv
+
+# Python cache
+__pycache__/
+*.pyc
