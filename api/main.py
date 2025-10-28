@@ -1,45 +1,25 @@
 # api/main.py
 
 from fastapi import FastAPI, Query
-from pydantic import BaseModel
-from typing import Optional
-from fastapi.middleware.cors import CORSMiddleware
-
 from src.recommend import (
     METADATA,
-    fallback_top_popular,
-    ensure_seed_or_fallback,
-    recommend_cb,
-    recommend_cf,
-    recommend_hybrid
+    recommend_hybrid,
+    fallback_top_popular
 )
 
 app = FastAPI(
-    title="Hybrid Music Recommender API",
-    version="2.0.0"
+    title="Hybrid ML Recommender API",
+    version="1.0.0",
+    description="Hybrid Collaborative + Content-based Music Recommendation"
 )
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"]
-)
-
-class HybridRequest(BaseModel):
-    track_id: str
-    user_id: Optional[str] = None
-    top_n: int = 10
-    w_cb: float = 0.4
-    w_cf: float = 0.6
 
 @app.get("/")
-def home():
+def root():
     return {
         "message": "✅ Hybrid Recommender is Live!",
         "docs": "/docs",
         "example": "/tracks?limit=20",
-        "hybrid": "/recommend/hybrid"
+        "hybrid": "/recommend/hybrid?track_id=6dyku3NZZukkS8yhzWG9TU"
     }
 
 @app.get("/health")
@@ -47,35 +27,17 @@ def health():
     return {"status": "✅ OK - Service healthy"}
 
 @app.get("/tracks")
-def tracks(limit: int = 50):
-    return METADATA.head(limit).to_dict(orient="records")
+def get_tracks(limit: int = Query(20, gt=0, lt=200)):
+    df = METADATA.head(limit)
+    return df.to_dict(orient="records")
 
-@app.get("/tracks/search")
-def search_tracks(q: str):
-    results = METADATA[METADATA["track_name"].str.contains(q, case=False, na=False)]
-    return results.head(25).to_dict(orient="records")
-
-@app.get("/popular")
-def popular(top_n: int = 10):
-    return fallback_top_popular(top_n)
-
-@app.get("/recommend/cb")
-def rec_cb(track_id: str, top_n: int = 10):
-    fb = ensure_seed_or_fallback(track_id, top_n)
-    if fb: return fb
-    return recommend_cb(track_id, top_n)
-
-@app.get("/recommend/cf")
-def rec_cf(track_id: str, top_n: int = 10):
-    fb = ensure_seed_or_fallback(track_id, top_n)
-    if fb: return fb
-    return recommend_cf(track_id, top_n)
-
-@app.post("/recommend/hybrid")
-def rec_hybrid(payload: HybridRequest):
-    fb = ensure_seed_or_fallback(payload.track_id, payload.top_n)
-    if fb: return fb
-    return recommend_hybrid(
-        payload.track_id, payload.user_id,
-        payload.top_n, payload.w_cb, payload.w_cf
-    )
+@app.get("/recommend/hybrid")
+def hybrid_api(track_id: str, user_id: str | None = None, top_n: int = 10):
+    results = recommend_hybrid(track_id, user_id, top_n)
+    if not results:
+        return fallback_top_popular(top_n)
+    
+    return {
+        "input_track_id": track_id,
+        "results": results
+    }
