@@ -5,3 +5,4 @@ numpy
 joblib
 gdown
 python-multipart
+gdown==5.1.0

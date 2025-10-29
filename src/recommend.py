@@ -1,204 +1,135 @@
-# src/recommend.py
-
 import os
 import numpy as np
 import pandas as pd
-import joblib
+import pickle
+import gdown
 
-# ----------------------------------------------------------
-# Globals: Lazy-loaded shared state
-# ----------------------------------------------------------
-_CB = None
-_CF = None
+MODEL_DIR = "models"
+META_PATH = "data/songs_metadata_for_api.csv"
+
+os.makedirs(MODEL_DIR, exist_ok=True)
+
+# Google Drive Model Files (ID, Filename)
+DRIVE_FILES = {
+    "cf": ("1ldM64nwdj4hNSmwnBxpbIHEr0VR7BsWg", "item_similarity_cf_matrix.pkl"),
+    "cb": ("145t8B6RdV9GXJNDSEkvF5BXhOA4qq7XE", "content_similarity.pkl"),
+    "uim": ("1pmWdY5DCpUDp4--ej0EM912pgdohdzPS", "user_item_matrix.pkl"),
+}
+
+
+def ensure_models_present():
+    for key, (file_id, filename) in DRIVE_FILES.items():
+        path = os.path.join(MODEL_DIR, filename)
+        if not os.path.exists(path):
+            print(f"📥 Downloading {filename}...")
+            url = f"https://drive.google.com/uc?id={file_id}"
+            gdown.download(url, path, quiet=False)
+    print("✅ Models ready")
+
+
+_CB_MODEL = None
+_CF_MODEL = None
+_UIM = None
 _META = None
-_TRACK_INDEX = None
-_N = None
 
 
-# ----------------------------------------------------------
-# Internal Utilities
-# ----------------------------------------------------------
-def _set_N(n: int):
-    global _N
-    _N = int(n)
+def _lazy_load_models():
+    global _CB_MODEL, _CF_MODEL, _UIM, _META
 
+    ensure_models_present()
 
-def _ensure_cb():
-    global _CB
-    if _CB is None:
+    if _CB_MODEL is None:
         print("Loading Content-Based model...")
-        _CB = joblib.load(os.path.join("models", "content_similarity.pkl"))
-        _CB = np.asarray(_CB)
-        if _CB.ndim != 2 or _CB.shape[0] != _CB.shape[1]:
-            raise ValueError(f"CB matrix must be square. Got {_CB.shape}")
-        _set_N(_CB.shape[0])
-        _ensure_metadata()
-    return _CB
+        _CB_MODEL = np.load(os.path.join(MODEL_DIR, DRIVE_FILES["cb"][1]), allow_pickle=True)
+
+    if _CF_MODEL is None:
+        print("Loading CF model...")
+        _CF_MODEL = np.load(os.path.join(MODEL_DIR, DRIVE_FILES["cf"][1]), allow_pickle=True)
+
+    if _UIM is None:
+        print("Loading User-Item Matrix...")
+        with open(os.path.join(MODEL_DIR, DRIVE_FILES["uim"][1]), "rb") as f:
+            _UIM = pickle.load(f)
+
+    if _META is None:
+        print("Loading metadata...")
+        _META = pd.read_csv(META_PATH)
+        _META.set_index("track_id", inplace=True)
 
 
-def _ensure_cf():
-    global _CF
-    if _CF is None:
-        print("Loading Collaborative Filtering model...")
-        _CF = joblib.load(os.path.join("models", "item_similarity_cf_matrix.pkl"))
-        _CF = np.asarray(_CF)
-        if _CF.ndim != 2 or _CF.shape[0] != _CF.shape[1]:
-            raise ValueError(f"CF matrix must be square. Got {_CF.shape}")
-        _set_N(_CF.shape[0])
-        _ensure_metadata()
-    return _CF
-
-
-def _ensure_metadata():
-    global _META, _TRACK_INDEX, _N
-    if _META is not None:
-        return _META
-
-    csv_path = os.path.join("data", "songs_metadata_for_api.csv")
-    if not os.path.exists(csv_path):
-        raise FileNotFoundError("Metadata file missing: " + csv_path)
-
-    meta = pd.read_csv(csv_path)
-
-    # Ensure required columns
-    for col in ["track_id", "track_name", "artist_name", "popularity"]:
-        if col not in meta.columns:
-            meta[col] = None
-
-    target = _N if _N is not None else len(meta)
-
-    # Align to model length
-    if len(meta) < target:
-        missing = target - len(meta)
-        filler = pd.DataFrame({
-            "track_id": [f"MISSING_{i}" for i in range(missing)],
-            "track_name": ["Unknown"] * missing,
-            "artist_name": ["Unknown Artist"] * missing,
-            "popularity": [None] * missing
-        })
-        meta = pd.concat([meta, filler], ignore_index=True)
-    elif len(meta) > target:
-        meta = meta.iloc[:target].reset_index(drop=True)
-
-    _META = meta[["track_id", "track_name", "artist_name", "popularity"]].copy()
-    _TRACK_INDEX = {str(tid): i for i, tid in enumerate(_META["track_id"].astype(str))}
-    _set_N(len(_META))
-    return _META
-
-
-def _idx_for_track(track_id: str):
-    if not track_id:
+def _idx(track_id: str):
+    if track_id not in _META.index:
         return None
-    meta = _ensure_metadata()
-    global _TRACK_INDEX
-    if len(_TRACK_INDEX) != len(meta):
-        _TRACK_INDEX = {str(tid): i for i, tid in enumerate(meta["track_id"].astype(str))}
-    return _TRACK_INDEX.get(str(track_id))
+    return _META.index.tolist().index(track_id)
 
 
-def _safe_scores_row(mat: np.ndarray, idx: int):
-    if mat is None or not isinstance(mat, np.ndarray):
-        return np.zeros((0,), dtype=np.float32)
-    if idx is None or idx < 0 or idx >= mat.shape[0]:
-        return np.zeros((mat.shape[0],), dtype=np.float32)
-    row = np.nan_to_num(mat[idx], nan=0.0, posinf=0.0, neginf=0.0)
-    return np.ravel(row)
+def fetch_metadata(limit=20):
+    _lazy_load_models()
+    return _META.reset_index().head(limit).to_dict(orient="records")
 
 
-def _top_n(scores: np.ndarray, n: int, exclude_idx: int = None):
-    if not isinstance(scores, np.ndarray) or scores.size == 0:
-        return np.array([], dtype=int), np.array([], dtype=float)
-    s = scores.copy()
-    if exclude_idx is not None and 0 <= exclude_idx < len(s):
-        s[exclude_idx] = -1.0
-    order = np.argsort(s)[::-1]
-    if n > 0:
-        order = order[:n]
-    return order, s[order]
+def _build_response(indices, scores, method, top_n):
+    recs = []
+    idx_list = _META.index.tolist()
 
-
-def _build_results(indices, scores, method):
-    meta = _ensure_metadata()
-    out = []
-    idxs = np.asarray(indices).tolist()
-    scrs = np.asarray(scores).tolist()
-
-    for idx, score in zip(idxs, scrs):
-        if not (0 <= idx < len(meta)):
-            continue
-
-        row = meta.iloc[idx]
-        pop = row.get("popularity")
-        pop = None if pd.isna(pop) else int(pop)
-
-        out.append({
-            "track_id": str(row.get("track_id")),
-            "track_name": str(row.get("track_name")),
-            "artist_name": str(row.get("artist_name")),
-            "popularity": pop,
-            "score": float(score),  # ✅ fixes JSON serialization issue
+    for i, score in zip(indices[:top_n], scores[:top_n]):
+        tid = idx_list[i]
+        row = _META.loc[tid]
+        recs.append({
+            "track_id": tid,
+            "track_name": row.get("track_name", "Unknown"),
+            "artist_name": row.get("artist_name", "Unknown Artist"),
+            "popularity": int(row.popularity) if pd.notna(row.popularity) else None,
+            "score": float(score),
             "method": method
         })
+    return recs
 
-    return out
 
-
-# ----------------------------------------------------------
-# ✅ PUBLIC API - Content Based
-# ----------------------------------------------------------
-def recommend_cb(track_id: str, top_n: int = 10):
-    idx = _idx_for_track(track_id)
+def recommend_cb(track_id: str, top_n=10):
+    _lazy_load_models()
+    idx = _idx(track_id)
     if idx is None:
         return None
-    cb = _ensure_cb()
-    scores = _safe_scores_row(cb, idx)
-    inds, scrs = _top_n(scores, top_n, exclude_idx=idx)
-    return _build_results(inds, scrs, "content")
+    scores = _CB_MODEL[idx]
+    inds = np.argsort(scores)[::-1]
+    return _build_response(inds[1:], scores[inds][1:], "content", top_n)
 
 
-# ----------------------------------------------------------
-# ✅ PUBLIC API - Collaborative Filtering
-# ----------------------------------------------------------
-def recommend_cf(track_id: str, top_n: int = 10):
-    idx = _idx_for_track(track_id)
+def recommend_cf(track_id: str, top_n=10):
+    _lazy_load_models()
+    idx = _idx(track_id)
     if idx is None:
         return None
-    cf = _ensure_cf()
-    scores = _safe_scores_row(cf, idx)
-    inds, scrs = _top_n(scores, top_n, exclude_idx=idx)
-    return _build_results(inds, scrs, "collab")
+    scores = _CF_MODEL[idx]
+    inds = np.argsort(scores)[::-1]
+    return _build_response(inds[1:], scores[inds][1:], "collab", top_n)
 
 
-# ----------------------------------------------------------
-# ✅ PUBLIC API - Hybrid (Safe fallback to content only)
-# ----------------------------------------------------------
-def recommend_hybrid(track_id: str, top_n: int = 10):
-    idx = _idx_for_track(track_id)
-    if idx is None:
-        return None
-
-    cb = _ensure_cb()
-    cb_scores = _safe_scores_row(cb, idx)
+def recommend_hybrid(track_id: str, top_n=10):
+    _lazy_load_models()
 
     try:
-        cf = _ensure_cf()
-        if cf.shape != cb.shape:
-            raise ValueError("Matrix shape mismatch")
+        cb = recommend_cb(track_id, top_n * 3)
+        cf = recommend_cf(track_id, top_n * 3)
 
-        cf_scores = _safe_scores_row(cf, idx)
-        hybrid = (0.4 * cb_scores) + (0.6 * cf_scores)
+        if not cb or not cf:
+            return cb or cf
 
-        inds, scrs = _top_n(hybrid, top_n, exclude_idx=idx)
-        return _build_results(inds, scrs, "hybrid_0.4cb_0.6cf")
+        combo = {}
+
+        for r in cb:
+            combo[r['track_id']] = r['score']
+
+        for r in cf:
+            combo[r['track_id']] = combo.get(r['track_id'], 0) + r['score']
+
+        sorted_items = sorted(combo.items(), key=lambda x: x[1], reverse=True)
+
+        indices = [list(_META.index).index(tid) for tid, _ in sorted_items]
+        scores = [score for _, score in sorted_items]
+
+        return _build_response(indices, scores, "hybrid", top_n)
 
     except Exception:
-        inds, scrs = _top_n(cb_scores, top_n, exclude_idx=idx)
-        return _build_results(inds, scrs, "hybrid_fallback_content")
-
-
-# ----------------------------------------------------------
-# ✅ PUBLIC API - Track listing
-# ----------------------------------------------------------
-def fetch_metadata(limit: int = 20):
-    meta = _ensure_metadata()
-    return meta.head(limit).to_dict(orient="records")
+        return recommend_cb(track_id, top_n)

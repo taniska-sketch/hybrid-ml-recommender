@@ -9,30 +9,33 @@ from src.recommend import (
 
 app = FastAPI(
     title="Hybrid ML Music Recommender API",
-    version="1.1.0",
+    version="1.2.0",
 )
+
 
 @app.get("/", tags=["Health"])
 def root():
     return {
         "message": "✅ Hybrid Recommender is Live!",
-        "docs": "/docs",
-        "tracks": "/tracks?limit=20",
-        "hybrid": "/recommend/hybrid?track_id=1X8uhUgBKmotpvHrsS7fEe&top_n=10",
-        "content": "/recommend/content?track_id=1X8uhUgBKmotpvHrsS7fEe&top_n=10",
-        "collab": "/recommend/collab?track_id=1X8uhUgBKmotpvHrsS7fEe&top_n=10"
+        "demo": {
+            "metadata": "/tracks?limit=10",
+            "hybrid": "/recommend/hybrid?track_id=1X8uhUgBKmotpvHrsS7fEe&top_n=10",
+        }
     }
+
 
 @app.get("/tracks", tags=["Tracks"])
 def get_tracks(limit: int = 20):
     return fetch_metadata(limit)
 
-@app.get("/recommend/hybrid", tags=["Hybrid Recommendation"])
+
+@app.get("/recommend/hybrid", tags=["Hybrid"])
 def hybrid(track_id: str, top_n: int = 10):
     try:
-        return recommend_hybrid(track_id, top_n=top_n)
+        return recommend_hybrid(track_id, top_n)
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
 
 @app.get("/recommend/content", tags=["Content-Based"])
 def content(track_id: str, top_n: int = 10):
@@ -40,6 +43,7 @@ def content(track_id: str, top_n: int = 10):
         return recommend_cb(track_id, top_n)
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
 
 @app.get("/recommend/collab", tags=["Collaborative Filtering"])
 def collab(track_id: str, top_n: int = 10):
