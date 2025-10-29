@@ -1,5 +1,3 @@
-# src/recommend.py
-
 import os
 import numpy as np
 import pandas as pd
@@ -8,100 +6,121 @@ import joblib
 DATA_DIR = "data"
 MODEL_DIR = "models"
 
+os.makedirs(MODEL_DIR, exist_ok=True)
+os.makedirs(DATA_DIR, exist_ok=True)
+
 META_CSV = os.path.join(DATA_DIR, "songs_metadata_for_api.csv")
 SCALED_CSV = os.path.join(DATA_DIR, "scaled_feature_sample.csv")
+
 CB_PKL = os.path.join(MODEL_DIR, "content_similarity.pkl")
 CF_PKL = os.path.join(MODEL_DIR, "item_similarity_cf_matrix.pkl")
 UIM_PKL = os.path.join(MODEL_DIR, "user_item_matrix.pkl")
 
-# ✅ Load metadata only (small)
 METADATA = pd.read_csv(META_CSV)
 METADATA["track_id"] = METADATA["track_id"].astype(str)
 
 if "popularity" not in METADATA.columns:
     pop = METADATA["artist_name"].value_counts().to_dict()
-    METADATA["popularity"] = METADATA["artist_name"].map(lambda a: pop.get(a, 1))
+    METADATA["popularity"] = METADATA["artist_name"].map(lambda x: pop.get(x, 1))
 
-# ✅ Globals to load later
-CB_SIM = None
-CF_SIM = None
-CB_INDEX = {}
-CF_INDEX = {}
 
-def lazy_load_cb():
-    """
-    Loads content-based similarity memory only when needed
-    """
-    global CB_SIM, CB_INDEX
-    if CB_SIM is None:
-        df_scaled = pd.read_csv(SCALED_CSV, index_col="track_id")
-        track_ids = df_scaled.index.tolist()
-        CB_SIM = joblib.load(CB_PKL)
-        CB_INDEX = {tid: i for i, tid in enumerate(track_ids)}
+# ✅ Lazy load content-based similarity
+def load_cb():
+    df_scaled = pd.read_csv(SCALED_CSV, index_col="track_id")
+    track_ids = df_scaled.index.tolist()
+    sim = joblib.load(CB_PKL)
+    index = {tid: i for i, tid in enumerate(track_ids)}
+    return sim, track_ids, index
 
-def lazy_load_cf():
-    """
-    Loads CF similarity only when needed
-    """
-    global CF_SIM, CF_INDEX
-    if CF_SIM is None and os.path.exists(CF_PKL):
-        CF_SIM = joblib.load(CF_PKL)
-        uim = joblib.load(UIM_PKL)
-        uim.columns = uim.columns.astype(str)
-        CF_INDEX = {tid: i for i, tid in enumerate(uim.columns)}
 
-def fallback_top_popular(top_n=10):
+# ✅ Lazy load CF similarity
+def load_cf():
+    if not os.path.exists(CF_PKL) or not os.path.exists(UIM_PKL):
+        return None, None, {}
+    sim = joblib.load(CF_PKL)
+    uim = joblib.load(UIM_PKL)
+    uim.columns = uim.columns.astype(str)
+    track_ids = list(uim.columns)
+    index = {tid: i for i, tid in enumerate(track_ids)}
+    return sim, track_ids, index
+
+
+def fallback_popular(top_n=10):
     df = METADATA.sort_values("popularity", ascending=False).head(top_n)
     return df.to_dict(orient="records")
 
-def ensure_seed_or_fallback(track_id, top_n=10):
-    if track_id not in METADATA["track_id"].values:
-        return fallback_top_popular(top_n)
-    return None
 
-def recommend_cb(track_id, top_n=10):
-    lazy_load_cb()
+# ✅ RECOMMENDATION FUNCTIONS (the names API needs)
+
+def recommend_content(track_id: str, top_n: int = 10):
+    CB_SIM, CB_IDS, CB_INDEX = load_cb()
     if track_id not in CB_INDEX:
-        return []
+        return fallback_popular(top_n)
+
     i = CB_INDEX[track_id]
     sims = CB_SIM[i]
-    order = np.argsort(-sims)[1:top_n+1]
-    return [(list(CB_INDEX.keys())[j], float(sims[j])) for j in order]
+    order = np.argsort(-sims)[1:top_n + 1]
 
-def recommend_cf(track_id, top_n=10):
-    lazy_load_cf()
+    results = []
+    for j in order:
+        tid = CB_IDS[j]
+        info = METADATA[METADATA["track_id"] == tid]
+        if not info.empty:
+            row = info.iloc[0]
+            results.append({
+                "track_id": tid,
+                "track_name": row["track_name"],
+                "artist_name": row["artist_name"],
+                "score": float(sims[j])
+            })
+    return results
+
+
+def recommend_collab(track_id: str, top_n: int = 10):
+    CF_SIM, CF_IDS, CF_INDEX = load_cf()
     if CF_SIM is None or track_id not in CF_INDEX:
-        return []
+        return fallback_popular(top_n)
+
     i = CF_INDEX[track_id]
     sims = CF_SIM[i]
-    order = np.argsort(-sims)[1:top_n+1]
-    return [(list(CF_INDEX.keys())[j], float(sims[j])) for j in order]
+    order = np.argsort(-sims)[1:top_n + 1]
 
-def build_metadata_response(results, top_n=10):
-    output = []
-    for tid, score in results[:top_n]:
-        r = METADATA[METADATA["track_id"] == tid].iloc[0]
-        output.append({
-            "track_id": tid,
-            "track_name": r["track_name"],
-            "artist_name": r["artist_name"],
-            "popularity": int(r.get("popularity", 0)),
-            "score": round(score, 4)
-        })
-    return output
+    results = []
+    for j in order:
+        tid = CF_IDS[j]
+        info = METADATA[METADATA["track_id"] == tid]
+        if not info.empty:
+            row = info.iloc[0]
+            results.append({
+                "track_id": tid,
+                "track_name": row["track_name"],
+                "artist_name": row["artist_name"],
+                "score": float(sims[j])
+            })
+    return results
 
-def recommend_hybrid(track_id, user_id=None, top_n=10, w_cb=0.4, w_cf=0.6):
-    cb = recommend_cb(track_id, top_n*2)
-    cf = recommend_cf(track_id, top_n*2)
 
-    if not cb and not cf:
-        return fallback_top_popular(top_n)
+def recommend_hybrid(track_id: str, top_n: int = 10, w_cb=0.4, w_cf=0.6):
+    cb = recommend_content(track_id, top_n * 2)
+    cf = recommend_collab(track_id, top_n * 2)
 
-    combined = {}
-    for tid, score in cb:
-        combined[tid] = combined.get(tid, 0) + w_cb * score
-    for tid, score in cf:
-        combined[tid] = combined.get(tid, 0) + w_cf * score
+    merged = {}
+    for x in cb:
+        merged[x["track_id"]] = merged.get(x["track_id"], 0) + w_cb * x["score"]
+    for x in cf:
+        merged[x["track_id"]] = merged.get(x["track_id"], 0) + w_cf * x["score"]
 
-    ranked = sorted(combined.items(), key=lambda x: x[1], reverse=True)
-    return build_metadata_response(ranked, top_n)
+    ranked = sorted(merged.items(), key=lambda x: x[1], reverse=True)[:top_n]
+
+    results = []
+    for tid, score in ranked:
+        row = METADATA[METADATA["track_id"] == tid]
+        if not row.empty:
+            r = row.iloc[0]
+            results.append({
+                "track_id": tid,
+                "track_name": r["track_name"],
+                "artist_name": r["artist_name"],
+                "score": round(score, 4)
+            })
+    return results
