@@ -2,14 +2,14 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from src.recommend import (
     recommend_hybrid,
-    recommend_content,
-    recommend_collab,
-    get_tracks_metadata
+    recommend_cb,
+    recommend_cf,
+    fetch_metadata
 )
 
 app = FastAPI(
     title="Hybrid ML Music Recommender API",
-    version="1.0.0",
+    version="1.1.0",
 )
 
 @app.get("/", tags=["Health"])
@@ -17,42 +17,33 @@ def root():
     return {
         "message": "✅ Hybrid Recommender is Live!",
         "docs": "/docs",
-        "example_metadata": "/tracks?limit=20",
-        "example_hybrid": "/recommend/hybrid?track_id=6dyku3NZZukkS8yhzWG9TU",
-        "example_content": "/recommend/content?track_id=6dyku3NZZukkS8yhzWG9TU",
-        "example_collab": "/recommend/collab?track_id=6dyku3NZZukkS8yhzWG9TU",
+        "tracks": "/tracks?limit=20",
+        "hybrid": "/recommend/hybrid?track_id=1X8uhUgBKmotpvHrsS7fEe&top_n=10",
+        "content": "/recommend/content?track_id=1X8uhUgBKmotpvHrsS7fEe&top_n=10",
+        "collab": "/recommend/collab?track_id=1X8uhUgBKmotpvHrsS7fEe&top_n=10"
     }
 
 @app.get("/tracks", tags=["Tracks"])
-def fetch_tracks(limit: int = 10):
-    return get_tracks_metadata(limit)
+def get_tracks(limit: int = 20):
+    return fetch_metadata(limit)
 
 @app.get("/recommend/hybrid", tags=["Hybrid Recommendation"])
 def hybrid(track_id: str, top_n: int = 10):
     try:
-        recs = recommend_hybrid(track_id, top_n)
-        if recs is None:
-            return JSONResponse(status_code=404, content={"detail": "Track not found"})
-        return recs
+        return recommend_hybrid(track_id, top_n=top_n)
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-@app.get("/recommend/content", tags=["Content-Based Recommendation"])
+@app.get("/recommend/content", tags=["Content-Based"])
 def content(track_id: str, top_n: int = 10):
     try:
-        recs = recommend_content(track_id, top_n)
-        if recs is None:
-            return JSONResponse(status_code=404, content={"detail": "Track not found"})
-        return recs
+        return recommend_cb(track_id, top_n)
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-@app.get("/recommend/collab", tags=["Collaborative Filtering Recommendation"])
+@app.get("/recommend/collab", tags=["Collaborative Filtering"])
 def collab(track_id: str, top_n: int = 10):
     try:
-        recs = recommend_collab(track_id, top_n)
-        if recs is None:
-            return JSONResponse(status_code=404, content={"detail": "Track not found"})
-        return recs
+        return recommend_cf(track_id, top_n)
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
