@@ -1,10 +1,41 @@
-# Ignore large model files
-models/*.pkl
-models/*.zip
-
-# Allow data CSV ✅
-!data/*.csv
-
-# Ignore cached python files
+# Python stuff
 __pycache__/
-*.pyc
+*.py[cod]
+*$.py.class
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# PyInstaller
+*.spec
+
+# Logs
+*.log
+
+# IDE configs
+.vscode/
+.idea/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Data files that shouldn't be tracked
+data/*.csv
+!data/songs_metadata_for_api.csv   # Keep this one
+
+# Allow models (tracked via Git LFS)
+!models/*.pkl
+
+# Uvicorn reload temporary
+*.pid
